@@ -55,10 +55,6 @@ pids
 # Diagnostic reports (https://nodejs.org/api/report.html)
 report.[0-9]*.[0-9]*.[0-9]*.[0-9]*.json
 
-# Custom for project
-accounts.txt
-accounts2.txt
-
 blacklist.txt
 lastid.txt
 
