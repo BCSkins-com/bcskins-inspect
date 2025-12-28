@@ -118,6 +118,13 @@ export class WorkerManagerService implements OnModuleInit {
     }
 
     private async loadAccounts(): Promise<void> {
+        // First, try loading from environment variable (for cloud deployments)
+        if (process.env.BOT_ACCOUNTS) {
+            this.logger.log('Loading accounts from BOT_ACCOUNTS environment variable');
+            this.processAccountFile(process.env.BOT_ACCOUNTS);
+            return;
+        }
+
         const accountsFile = process.env.ACCOUNTS_FILE || 'accounts.txt';
         // this.logger.debug(`Loading accounts from ${accountsFile}`);
 
@@ -147,7 +154,8 @@ export class WorkerManagerService implements OnModuleInit {
 
             throw new Error(`Accounts file not found at ${accountsFile} or fallback locations`);
         } catch (error) {
-            // this.logger.error(`Failed to load accounts: ${error.message}`);
+            this.logger.error(`Failed to load accounts: ${error.message}`);
+            this.logger.warn('No bot accounts available. Add BOT_ACCOUNTS env var or accounts.txt file');
         }
     }
 
