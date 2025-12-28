@@ -66,7 +66,10 @@ class BotWorker {
         let failureCount = 0;
 
         for (const account of this.accounts) {
-            const [username, password] = account.split(':');
+            // Split only on first colon to handle passwords containing colons
+            const colonIndex = account.indexOf(':');
+            const username = account.substring(0, colonIndex);
+            const password = account.substring(colonIndex + 1);
 
             // Skip throttled accounts
             const throttleExpiry = this.throttledAccounts.get(username);

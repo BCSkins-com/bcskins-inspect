@@ -1,6 +1,6 @@
-# CS2 Inspect service
+# CS2 Inspect Service
 
-This is a simple inspect service for the CS2. The service is built using [Nest.js](https://nestjs.com/), [TypeORM](https://typeorm.io/), and [PostgreSQL](https://www.postgresql.org/).
+This is a simple inspect service for CS2. The service is built using [Nest.js](https://nestjs.com/) and [MongoDB](https://www.mongodb.com/).
 
 ## Installation
 
@@ -62,14 +62,10 @@ PORT=3000
 
 ### Database
 
-The server uses a PostgreSQL database to store the data. The database is configured using the environment variables in the `.env` file.
+The server uses MongoDB to store the data. The database is configured using the `DATABASE_URL` environment variable in the `.env` file.
 
 ```bash
-POSTGRESQL_HOST=
-POSTGRESQL_PORT=
-POSTGRESQL_USERNAME=
-POSTGRESQL_PASSWORD=
-POSTGRESQL_DB=
+DATABASE_URL=mongodb+srv://username:password@cluster.mongodb.net/database?appName=AppName
 ```
 
 ### Proxy
@@ -102,14 +98,6 @@ Pass `true` to the `refresh` query parameter to refresh the stickers. (This will
 $ curl -X GET -H "Content-Type: application/json" http://localhost:3000/?url=steam://rungame/730/76561202255233023/+csgo_econ_action_preview%20S76561198023809011A35678726741D4649654965632117657&refresh=true
 ```
 
-### Logging
-
-You can enable logging for the PostgreSQL database by setting the `POSTGRESQL_LOGGING` environment variable to `true`.
-
-```bash
-POSTGRESQL_LOGGING=true
-```
-
 ### GameCoordiantor Logging
 
 You can enable logging for the GameCoordiantor by setting the `GC_DEBUG` environment variable to `true`.
@@ -134,16 +122,11 @@ The `.env` file contains the environment variables that are used to configure th
 
 ```bash
 # .env
-PORT=3000
-POSTGRESQL_HOST=
-POSTGRESQL_PORT=
-POSTGRESQL_USERNAME=
-POSTGRESQL_PASSWORD=
-POSTGRESQL_DB=
+PORT=3002
+DATABASE_URL=mongodb+srv://username:password@cluster.mongodb.net/database
 PROXY_URL=[socks5|http]://[username][session]:[password]@[url]:[port]
-POSTGRESQL_LOGGING=false
 GC_DEBUG=false
-PING_PRICEMPIRE=true
+PING_PRICEMPIRE=false
 ALLOW_REFRESH=false
 ```
 
@@ -218,27 +201,6 @@ $ curl -X GET -H "Content-Type: application/json" http://localhost:3000/?url=ste
 }
 ```
 
-## Importing the data from old CSFloat database
-
-You can import the data from the old CSFloat database using the following command:
-
-```bash
-$ pnpm run import
-```
-
-Dont forget to set the `POSTGRESQL_HOST_SOURCE`, `POSTGRESQL_PORT_SOURCE`, `POSTGRESQL_USER_SOURCE`, `POSTGRESQL_PASSWORD_SOURCE`, `POSTGRESQL_DB_SOURCE` environment variables in the `.env` file.
-
-```bash
-# .env
-POSTGRESQL_HOST_SOURCE=
-POSTGRESQL_PORT_SOURCE=
-POSTGRESQL_USER_SOURCE=
-POSTGRESQL_PASSWORD_SOURCE=
-POSTGRESQL_DB_SOURCE=
-```
-
-This will import the data from the old CSFloat database to the new database.
-
 # Contributing
 
 If you want to contribute to the project, you can do so by creating a pull request.
@@ -250,8 +212,8 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 # Acknowledgements
 
 - [Nest.js](https://nestjs.com/)
-- [TypeORM](https://typeorm.io/)
-- [PostgreSQL](https://www.postgresql.org/)
+- [MongoDB](https://www.mongodb.com/)
+- [Mongoose](https://mongoosejs.com/)
 - [Axios](https://axios-http.com/)
 - [CS2](https://blog.counter-strike.net/)
 - [node-globaloffensive](https://github.com/DoctorMcKay/node-globaloffensive)
@@ -261,7 +223,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 - [DoctorMcKay](https://github.com/DoctorMcKay)
 - [CSFloat.com](https://csfloat.com/)
-
-# Contact
-
-If you have any questions, you can contact me at [Discord](https://discord.gg/pricempire).
+- [Pricempire](https://pricempire.com/)

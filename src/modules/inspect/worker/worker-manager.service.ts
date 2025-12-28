@@ -1,8 +1,4 @@
 import { Injectable, Logger, OnModuleInit } from '@nestjs/common';
-import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
-import { Asset } from 'src/entities/asset.entity';
-import { History, HistoryType } from 'src/entities/history.entity';
 import { Bot } from '../bot.class';
 import * as fs from 'fs';
 import * as path from 'path';

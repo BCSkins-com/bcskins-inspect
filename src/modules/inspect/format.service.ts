@@ -1,18 +1,15 @@
-import { HttpService } from '@nestjs/axios'
+import { HttpService } from '@nestjs/axios';
 import {
     HttpException,
     HttpStatus,
     Injectable,
     Logger,
     OnModuleInit,
-} from '@nestjs/common'
-import { InjectRepository } from '@nestjs/typeorm'
-import { firstValueFrom } from 'rxjs'
-import { Asset } from 'src/entities/asset.entity'
-import { Rankings } from 'src/views/rankings.view'
-import { Repository } from 'typeorm'
-import { Schema, FormattedResponse, Metadata, Paint } from './interfaces/schema.interface'
-import { getPatternName } from 'src/constants'
+} from '@nestjs/common';
+import { firstValueFrom } from 'rxjs';
+import { AssetDocument } from 'src/schemas/asset.schema';
+import { Schema, FormattedResponse, Metadata, Paint } from './interfaces/schema.interface';
+import { getPatternName } from 'src/constants';
 
 enum ItemDefIndex {
     Sticker = 1209,
@@ -58,54 +55,48 @@ const Phase = {
 
 @Injectable()
 export class FormatService implements OnModuleInit {
-    private readonly logger = new Logger(FormatService.name)
-    private schema: Schema
+    private readonly logger = new Logger(FormatService.name);
+    private schema: Schema;
 
     constructor(
         private httpService: HttpService,
-        @InjectRepository(Rankings)
-        private rankingRepository: Repository<Rankings>,
     ) { }
 
     async onModuleInit() {
-        await this.loadSchema()
+        await this.loadSchema();
     }
 
     private async loadSchema(): Promise<void> {
-        this.logger.debug('Loading schema...')
+        this.logger.debug('Loading schema...');
         try {
             const response = await firstValueFrom(
                 this.httpService.get<Schema>('https://csfloat.com/api/v1/schema'),
-            )
-            this.schema = response.data
-            this.logger.debug('Schema loaded')
+            );
+            this.schema = response.data;
+            this.logger.debug('Schema loaded');
         } catch (error) {
-            this.logger.error('Failed to load schema', error)
-            throw new Error('Failed to load schema')
+            this.logger.error('Failed to load schema', error);
+            throw new Error('Failed to load schema');
         }
     }
 
-    public async formatResponse(asset: Asset): Promise<FormattedResponse> {
-        const rank = await this.rankingRepository.findOne({
-            where: { uniqueId: asset.uniqueId },
-        })
-
-        const meta = this.createMetadata(asset, rank)
+    public async formatResponse(asset: AssetDocument | any): Promise<FormattedResponse> {
+        const meta = this.createMetadata(asset);
 
         if (!this.schema.weapons[asset.defIndex]) {
-            return this.formatSpecialItem(asset)
+            return this.formatSpecialItem(asset);
         }
 
-        return this.formatWeapon(asset, meta)
+        return this.formatWeapon(asset, meta);
     }
 
-    private createMetadata(asset: Asset, rank?: Rankings): Metadata {
+    private createMetadata(asset: AssetDocument | any): Metadata {
         return {
             wear: asset.paintWear ? this.getWear(asset.paintWear) : undefined,
-            low_rank: rank?.lowRank,
-            high_rank: rank?.highRank,
-            totalCount: rank?.globalHigh,
-            rank,
+            low_rank: undefined, // Rankings removed - can be implemented later with MongoDB aggregation
+            high_rank: undefined,
+            totalCount: undefined,
+            rank: undefined,
             paintIndex: asset.paintIndex,
             defIndex: asset.defIndex,
             quality: asset.quality,
@@ -114,23 +105,23 @@ export class FormatService implements OnModuleInit {
             paintSeed: asset.paintSeed,
             paintWear: asset.paintWear,
             killeaterValue: asset.killeaterValue,
-        }
+        };
     }
 
-    private formatSpecialItem(asset: Asset): FormattedResponse {
+    private formatSpecialItem(asset: AssetDocument | any): FormattedResponse {
         switch (asset.defIndex) {
             case ItemDefIndex.Sticker:
-                return this.formatSticker(asset)
+                return this.formatSticker(asset);
             case ItemDefIndex.Graffiti:
             case ItemDefIndex.Graffiti2:
-                return this.formatGraffiti(asset)
+                return this.formatGraffiti(asset);
             case ItemDefIndex.Keychain:
-                return this.formatKeychain(asset)
+                return this.formatKeychain(asset);
 
             case ItemDefIndex.Bomb:
             default:
                 if (this.schema.agents[asset.defIndex]) {
-                    return this.formatAgent(asset)
+                    return this.formatAgent(asset);
                 }
                 return {
                     iteminfo: {
@@ -140,19 +131,18 @@ export class FormatService implements OnModuleInit {
                         quality: asset.quality,
                         origin: asset.origin,
                         type: 'Unknown',
-                        ...asset
+                        ...asset.toObject ? asset.toObject() : asset
                     },
-                }
+                };
         }
     }
 
-    private formatSticker(asset: Asset): FormattedResponse {
+    private formatSticker(asset: AssetDocument | any): FormattedResponse {
+        const stickerId = asset.stickers[0].sticker_id;
 
-        const stickerId = asset.stickers[0].sticker_id
-
-        const sticker = this.schema.stickers[stickerId]
+        const sticker = this.schema.stickers[stickerId];
         if (!sticker) {
-            throw new HttpException('Sticker not found', HttpStatus.NOT_FOUND)
+            throw new HttpException('Sticker not found', HttpStatus.NOT_FOUND);
         }
 
         return {
@@ -167,18 +157,18 @@ export class FormatService implements OnModuleInit {
                 sticker_id: stickerId,
                 type: 'Sticker',
             },
-        }
+        };
     }
 
-    private formatKeychain(asset: Asset): FormattedResponse {
-        const keychainId = asset.keychains.find((keychain) => keychain.slot === 0)?.sticker_id
+    private formatKeychain(asset: AssetDocument | any): FormattedResponse {
+        const keychainId = asset.keychains.find((keychain) => keychain.slot === 0)?.sticker_id;
         if (!keychainId) {
-            throw new HttpException('Keychain not found', HttpStatus.NOT_FOUND)
+            throw new HttpException('Keychain not found', HttpStatus.NOT_FOUND);
         }
 
-        const keychain = this.schema.keychains[keychainId]
+        const keychain = this.schema.keychains[keychainId];
         if (!keychain) {
-            throw new HttpException('Keychain not found', HttpStatus.NOT_FOUND)
+            throw new HttpException('Keychain not found', HttpStatus.NOT_FOUND);
         }
 
         return {
@@ -196,11 +186,11 @@ export class FormatService implements OnModuleInit {
                     market_hash_name: this.schema.keychains[keychain.sticker_id].market_hash_name,
                 })),
             },
-        }
+        };
     }
 
-    private formatGraffiti(asset: Asset): FormattedResponse {
-        const graffitiId = asset.stickers[0].sticker_id
+    private formatGraffiti(asset: AssetDocument | any): FormattedResponse {
+        const graffitiId = asset.stickers[0].sticker_id;
         return {
             iteminfo: {
                 asset_id: asset.assetId,
@@ -209,17 +199,16 @@ export class FormatService implements OnModuleInit {
                 rarity: asset.rarity,
                 quality: asset.quality,
                 origin: asset.origin,
-                // market_hash_name: graffiti.market_hash_name,
                 graffiti_id: graffitiId,
                 type: 'Graffiti',
             },
-        }
+        };
     }
 
-    private formatAgent(asset: Asset): FormattedResponse {
-        const agent = this.schema.agents[asset.defIndex]
+    private formatAgent(asset: AssetDocument | any): FormattedResponse {
+        const agent = this.schema.agents[asset.defIndex];
         if (!agent) {
-            throw new HttpException('Agent not found', HttpStatus.NOT_FOUND)
+            throw new HttpException('Agent not found', HttpStatus.NOT_FOUND);
         }
 
         return {
@@ -238,14 +227,14 @@ export class FormatService implements OnModuleInit {
                     market_hash_name: this.schema.stickers[sticker.sticker_id].market_hash_name,
                 })),
             },
-        }
+        };
     }
 
-    private formatWeapon(asset: Asset, meta: Metadata): FormattedResponse {
-        const weapon = this.schema.weapons[asset.defIndex]
-        const paint = this.getPaint(weapon.paints, asset.paintIndex)
+    private formatWeapon(asset: AssetDocument | any, meta: Metadata): FormattedResponse {
+        const weapon = this.schema.weapons[asset.defIndex];
+        const paint = this.getPaint(weapon.paints, asset.paintIndex);
 
-        const marketHashName = this.buildMarketHashName(weapon, paint, meta)
+        const marketHashName = this.buildMarketHashName(weapon, paint, meta);
         return {
             iteminfo: {
                 asset_id: asset.assetId,
@@ -263,11 +252,11 @@ export class FormatService implements OnModuleInit {
                     slot: sticker.slot,
                     sticker_id: sticker.sticker_id,
                     wear: sticker.wear,
-                    market_hash_name: this.schema.stickers[sticker.sticker_id].market_hash_name,
+                    market_hash_name: this.schema.stickers[sticker.sticker_id]?.market_hash_name,
                 })) ?? [],
                 keychains: asset.keychains?.map((keychain) => ({
                     ...keychain,
-                    market_hash_name: this.schema.keychains[keychain.sticker_id].market_hash_name,
+                    market_hash_name: this.schema.keychains[keychain.sticker_id]?.market_hash_name,
                 })) ?? [],
                 image: paint?.image,
                 type: 'Weapon',
@@ -275,34 +264,34 @@ export class FormatService implements OnModuleInit {
                 high_rank: meta.high_rank,
                 total_count: meta.totalCount,
                 souvenir: meta.quality === 12,
-                stattrak: meta.killeaterValue !== null,
+                stattrak: meta.killeaterValue !== null && meta.killeaterValue !== undefined,
                 min: paint?.min,
                 max: paint?.max,
                 phase: Phase[asset.paintIndex] ?? undefined,
                 pattern: getPatternName(marketHashName, meta.paintSeed),
             },
-        }
+        };
     }
 
     private getPaint(paints: Record<string, Paint>, paintIndex?: number): Paint | undefined {
-        if (!paintIndex) return undefined
-        return paints[paintIndex.toString()]
+        if (!paintIndex) return undefined;
+        return paints[paintIndex.toString()];
     }
 
     private buildMarketHashName(weapon: any, paint: Paint | undefined, meta: Metadata): string {
-        const parts: string[] = []
+        const parts: string[] = [];
 
         if (meta.quality === 3) {
-            parts.push('★')
+            parts.push('★');
         }
 
-        if (meta.killeaterValue !== null) {
-            parts.push('StatTrak™')
+        if (meta.killeaterValue !== null && meta.killeaterValue !== undefined) {
+            parts.push('StatTrak™');
         } else if (meta.quality === 12) {
-            parts.push('Souvenir')
+            parts.push('Souvenir');
         }
 
-        parts.push(weapon.name)
+        parts.push(weapon.name);
 
         let phase;
 
@@ -310,44 +299,44 @@ export class FormatService implements OnModuleInit {
 
         if (paintName && paintName.includes('Doppler (')) {
             if (paintName.includes('Phase 1')) {
-                paintName = paintName.replace(' (Phase 1)', '')
-                phase = 'Phase 1'
+                paintName = paintName.replace(' (Phase 1)', '');
+                phase = 'Phase 1';
             } else if (paintName.includes('Phase 2')) {
-                paintName = paintName.replace(' (Phase 2)', '')
-                phase = 'Phase 2'
+                paintName = paintName.replace(' (Phase 2)', '');
+                phase = 'Phase 2';
             } else if (paintName.includes('Phase 3')) {
-                paintName = paintName.replace(' (Phase 3)', '')
-                phase = 'Phase 3'
+                paintName = paintName.replace(' (Phase 3)', '');
+                phase = 'Phase 3';
             } else if (paintName.includes('Phase 4')) {
-                paintName = paintName.replace(' (Phase 4)', '')
-                phase = 'Phase 4'
+                paintName = paintName.replace(' (Phase 4)', '');
+                phase = 'Phase 4';
             } else if (paintName.includes('Ruby')) {
-                paintName = paintName.replace(' (Ruby)', '')
-                phase = 'Ruby'
+                paintName = paintName.replace(' (Ruby)', '');
+                phase = 'Ruby';
             } else if (paintName.includes('Sapphire')) {
-                paintName = paintName.replace(' (Sapphire)', '')
-                phase = 'Sapphire'
+                paintName = paintName.replace(' (Sapphire)', '');
+                phase = 'Sapphire';
             } else if (paintName.includes('Black Pearl')) {
-                paintName = paintName.replace(' (Black Pearl)', '')
-                phase = 'Black Pearl'
+                paintName = paintName.replace(' (Black Pearl)', '');
+                phase = 'Black Pearl';
             } else if (paintName.includes('Emerald')) {
-                paintName = paintName.replace(' (Emerald)', '')
-                phase = 'Emerald'
+                paintName = paintName.replace(' (Emerald)', '');
+                phase = 'Emerald';
             }
         }
 
-        if (paint) parts.push(`| ${paintName}`)
-        if (meta.wear && paint /** make sure it wont add to the vanilla paint */) parts.push(`(${meta.wear})`)
-        if (phase) parts.push(`- ${phase}`)
+        if (paint) parts.push(`| ${paintName}`);
+        if (meta.wear && paint /** make sure it wont add to the vanilla paint */) parts.push(`(${meta.wear})`);
+        if (phase) parts.push(`- ${phase}`);
 
         return parts.join(' ').trim();
     }
 
     private getWear(wear: number): string {
-        if (wear < WearRange.FactoryNew) return 'Factory New'
-        if (wear < WearRange.MinimalWear) return 'Minimal Wear'
-        if (wear < WearRange.FieldTested) return 'Field-Tested'
-        if (wear < WearRange.WellWorn) return 'Well-Worn'
-        return 'Battle-Scarred'
+        if (wear < WearRange.FactoryNew) return 'Factory New';
+        if (wear < WearRange.MinimalWear) return 'Minimal Wear';
+        if (wear < WearRange.FieldTested) return 'Field-Tested';
+        if (wear < WearRange.WellWorn) return 'Well-Worn';
+        return 'Battle-Scarred';
     }
 }

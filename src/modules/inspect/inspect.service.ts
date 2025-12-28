@@ -4,50 +4,50 @@ import {
     Injectable,
     Logger,
     OnModuleInit,
-} from '@nestjs/common'
-import { ParseService } from './parse.service'
-import { InjectRepository } from '@nestjs/typeorm'
-import { Asset } from 'src/entities/asset.entity'
-import { History, HistoryType } from 'src/entities/history.entity'
-import { Repository } from 'typeorm'
-import { FormatService } from './format.service'
-import { InspectDto } from './inspect.dto'
-import { createHash } from 'crypto'
-import { QueueService } from './queue.service'
-import { WorkerManagerService } from './worker/worker-manager.service'
+} from '@nestjs/common';
+import { InjectModel } from '@nestjs/mongoose';
+import { Model } from 'mongoose';
+import { ParseService } from './parse.service';
+import { Asset, AssetDocument } from 'src/schemas/asset.schema';
+import { History, HistoryDocument, HistoryType } from 'src/schemas/history.schema';
+import { FormatService } from './format.service';
+import { InspectDto } from './inspect.dto';
+import { createHash } from 'crypto';
+import { QueueService } from './queue.service';
+import { WorkerManagerService } from './worker/worker-manager.service';
 
 @Injectable()
 export class InspectService implements OnModuleInit {
-    private readonly logger = new Logger(InspectService.name)
-    private startTime: number = Date.now()
-    private readonly QUEUE_TIMEOUT = parseInt(process.env.QUEUE_TIMEOUT || '10000') // 10 seconds timeout
-    private readonly MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE || '100')
+    private readonly logger = new Logger(InspectService.name);
+    private startTime: number = Date.now();
+    private readonly QUEUE_TIMEOUT = parseInt(process.env.QUEUE_TIMEOUT || '10000'); // 10 seconds timeout
+    private readonly MAX_QUEUE_SIZE = parseInt(process.env.MAX_QUEUE_SIZE || '100');
 
     private inspects: Map<string, {
-        ms: string
-        d: string
-        resolve: (value: any) => void
-        reject: (reason?: any) => void
-        timeoutId: NodeJS.Timeout
-        startTime?: number
-        retryCount?: number
-        inspectUrl?: { s: string, a: string, d: string, m: string }
-        priority: string
-    }> = new Map()
+        ms: string;
+        d: string;
+        resolve: (value: any) => void;
+        reject: (reason?: any) => void;
+        timeoutId: NodeJS.Timeout;
+        startTime?: number;
+        retryCount?: number;
+        inspectUrl?: { s: string; a: string; d: string; m: string };
+        priority: string;
+    }> = new Map();
 
-    private currentRequests = 0
-    private success = 0
-    private cached = 0
-    private failed = 0
-    private timeouts = 0
+    private currentRequests = 0;
+    private success = 0;
+    private cached = 0;
+    private failed = 0;
+    private timeouts = 0;
 
     constructor(
         private parseService: ParseService,
         private formatService: FormatService,
-        @InjectRepository(Asset)
-        private assetRepository: Repository<Asset>,
-        @InjectRepository(History)
-        private historyRepository: Repository<History>,
+        @InjectModel(Asset.name)
+        private assetModel: Model<AssetDocument>,
+        @InjectModel(History.name)
+        private historyModel: Model<HistoryDocument>,
         private readonly queueService: QueueService,
         private readonly workerManagerService: WorkerManagerService,
     ) { }
@@ -195,14 +195,6 @@ export class InspectService implements OnModuleInit {
                 priority: query.lowPriority ? 'low' : 'normal'
             });
 
-            /*
-            // TODO: Remove this once the maintenance is done
-            reject(new HttpException(
-                'Inspection service is currently under maintenance, please try again later',
-                HttpStatus.SERVICE_UNAVAILABLE
-            )); 
-            */
-
             // Try using the worker manager
             this.workerManagerService.inspectItem(s, a, d, m, query.lowPriority ? 'low' : 'normal')
                 .then(async (response) => {
@@ -326,17 +318,13 @@ export class InspectService implements OnModuleInit {
         } catch (error) {
             this.logger.error(`Failed to handle inspect result: ${error.message}`);
             throw error;
-        } finally {
-            // Cleanup will happen in the inspectItem method
         }
     }
 
     private async checkCache(assetId: string, d: string): Promise<any> {
         try {
-            // Convert string assetId to number
             const assetIdNum = parseInt(assetId, 10);
-
-            const asset = await this.assetRepository.findOne({ where: { assetId: assetIdNum } });
+            const asset = await this.assetModel.findOne({ assetId: assetIdNum }).exec();
             if (asset) {
                 return this.formatService.formatResponse(asset);
             }
@@ -348,31 +336,24 @@ export class InspectService implements OnModuleInit {
     }
 
     private async findHistory(response: any) {
-        return await this.assetRepository.findOne({
-            where: {
-                paintWear: response.paintwear,
-                paintIndex: response.paintindex,
-                defIndex: response.defindex,
-                paintSeed: response.paintseed,
-                origin: response.origin,
-                questId: response.questid,
-                rarity: response.rarity,
-            },
-            order: {
-                createdAt: 'DESC',
-            },
-        })
+        return await this.assetModel.findOne({
+            paintWear: response.paintwear,
+            paintIndex: response.paintindex,
+            defIndex: response.defindex,
+            paintSeed: response.paintseed,
+            origin: response.origin,
+            questId: response.questid,
+            rarity: response.rarity,
+        }).sort({ createdAt: -1 }).exec();
     }
 
     private async saveHistory(response: any, history: any, inspectData: any, uniqueId: string) {
-        const existing = await this.historyRepository.findOne({
-            where: {
-                assetId: parseInt(response.itemid),
-            },
-        })
+        const existing = await this.historyModel.findOne({
+            assetId: parseInt(response.itemid),
+        }).exec();
 
         if (!existing) {
-            await this.historyRepository.insert({
+            await this.historyModel.create({
                 uniqueId,
                 assetId: parseInt(response.itemid),
                 prevAssetId: history?.assetId,
@@ -384,61 +365,56 @@ export class InspectService implements OnModuleInit {
                 prevStickers: history?.stickers,
                 prevKeychains: history?.keychains,
                 type: this.getHistoryType(response, history, inspectData),
-            })
+            });
         }
     }
 
-    private getHistoryType(response: any, history: History, inspectData: any): HistoryType {
+    private getHistoryType(response: any, history: any, inspectData: any): HistoryType {
         if (!history) {
-            if (response.origin === 8) return HistoryType.TRADED_UP
-            if (response.origin === 4) return HistoryType.DROPPED
-            if (response.origin === 1) return HistoryType.PURCHASED_INGAME
-            if (response.origin === 2) return HistoryType.UNBOXED
-            if (response.origin === 3) return HistoryType.CRAFTED
-            return HistoryType.UNKNOWN
+            if (response.origin === 8) return HistoryType.TRADED_UP;
+            if (response.origin === 4) return HistoryType.DROPPED;
+            if (response.origin === 1) return HistoryType.PURCHASED_INGAME;
+            if (response.origin === 2) return HistoryType.UNBOXED;
+            if (response.origin === 3) return HistoryType.CRAFTED;
+            return HistoryType.UNKNOWN;
         }
 
         if (history?.owner !== inspectData?.ms) {
             if (history?.owner?.toString().startsWith('7656')) {
-                return HistoryType.TRADE
+                return HistoryType.TRADE;
             }
             if (history?.owner && !history?.owner?.toString().startsWith('7656')) {
-                return HistoryType.MARKET_BUY
+                return HistoryType.MARKET_BUY;
             }
         }
 
         if (history?.owner && history.owner.toString().startsWith('7656') && !inspectData?.ms?.toString().startsWith('7656')) {
-            return HistoryType.MARKET_LISTING
+            return HistoryType.MARKET_LISTING;
         }
 
         if (history.owner === inspectData.ms) {
-            const stickerChanges = this.detectStickerChanges(response.stickers, history.stickers)
-            if (stickerChanges) return stickerChanges
+            const stickerChanges = this.detectStickerChanges(response.stickers, history.stickers);
+            if (stickerChanges) return stickerChanges;
 
-            const keychainChanges = this.detectKeychainChanges(response.keychains, history.keychains)
-            if (keychainChanges) return keychainChanges
+            const keychainChanges = this.detectKeychainChanges(response.keychains, history.keychains);
+            if (keychainChanges) return keychainChanges;
         }
 
-        return HistoryType.UNKNOWN
+        return HistoryType.UNKNOWN;
     }
 
-
     private detectStickerChanges(currentStickers: any[], previousStickers: any[]): HistoryType | null {
-        if (!currentStickers || !previousStickers) return null
+        if (!currentStickers || !previousStickers) return null;
 
-        // Check if stickers have been added or removed
         if (currentStickers.length > previousStickers.length) {
-            return HistoryType.STICKER_APPLY
+            return HistoryType.STICKER_APPLY;
         }
 
         if (currentStickers.length < previousStickers.length) {
-            return HistoryType.STICKER_REMOVE
+            return HistoryType.STICKER_REMOVE;
         }
 
-        // If the count is the same, check for position or wear changes
         for (const current of currentStickers) {
-            // [{"slot": 2, "wear": 0.6399999856948853, "scale": null, "pattern": null, "tint_id": null, "offset_x": -0.5572507381439209, "offset_y": -0.019832462072372437, "offset_z": null, "rotation": null, "sticker_id": 8541}]
-            // Find matching sticker in previous collection based on position
             const previous = previousStickers.find(
                 prev => prev.offset_x === current.offset_x &&
                     prev.offset_y === current.offset_y &&
@@ -446,52 +422,47 @@ export class InspectService implements OnModuleInit {
                     prev.rotation === current.rotation &&
                     prev.slot === current.slot &&
                     prev.sticker_id === current.sticker_id
-            )
+            );
 
-            // No matching sticker found at this position - indicates change
             if (!previous) {
                 if (currentStickers.length === previousStickers.length) {
-                    return HistoryType.STICKER_CHANGE
+                    return HistoryType.STICKER_CHANGE;
                 }
-
-                return HistoryType.STICKER_REMOVE
+                return HistoryType.STICKER_REMOVE;
             }
 
-            // Sticker found but wear value changed
             if (previous && current.wear !== previous.wear) {
-                // Higher wear value means more scraped
                 if (current.wear > previous.wear) {
-                    return HistoryType.STICKER_SCRAPE
+                    return HistoryType.STICKER_SCRAPE;
                 }
-                return HistoryType.STICKER_CHANGE
+                return HistoryType.STICKER_CHANGE;
             }
         }
 
-        return null
+        return null;
     }
 
     private detectKeychainChanges(currentKeychains: any[], previousKeychains: any[]): HistoryType | null {
-        if (!currentKeychains || !previousKeychains) return null
+        if (!currentKeychains || !previousKeychains) return null;
 
         if (currentKeychains.length === 0 && previousKeychains.length > 0) {
-            return HistoryType.KEYCHAIN_REMOVED
+            return HistoryType.KEYCHAIN_REMOVED;
         }
         if (currentKeychains.length > 0 && previousKeychains.length === 0) {
-            return HistoryType.KEYCHAIN_ADDED
+            return HistoryType.KEYCHAIN_ADDED;
         }
         if (JSON.stringify(currentKeychains) !== JSON.stringify(previousKeychains)) {
-            return HistoryType.KEYCHAIN_CHANGED
+            return HistoryType.KEYCHAIN_CHANGED;
         }
-        return null
+        return null;
     }
 
-
     private async saveAsset(response: any, inspectData: any, uniqueId: string) {
-        await this.assetRepository.upsert({
+        const assetData = {
             uniqueId,
             ms: inspectData.ms,
             d: inspectData.d,
-            assetId: response.itemid,
+            assetId: parseInt(response.itemid),
             paintSeed: response.paintseed === null ? 0 : response.paintseed,
             paintIndex: response.paintindex === null ? 0 : response.paintindex,
             paintWear: response.paintwear === null ? 0 : response.paintwear,
@@ -510,39 +481,36 @@ export class InspectService implements OnModuleInit {
             musicIndex: response.musicindex,
             entIndex: response.entindex,
             dropReason: response.dropreason,
-            updatedAt: new Date(),
-        }, ['uniqueId'])
+        };
 
-        return await this.assetRepository.findOne({
-            where: {
-                assetId: parseInt(response.itemid),
-            },
-        })
+        // Upsert by uniqueId
+        await this.assetModel.findOneAndUpdate(
+            { uniqueId },
+            { $set: assetData },
+            { upsert: true, new: true }
+        ).exec();
+
+        return await this.assetModel.findOne({ assetId: parseInt(response.itemid) }).exec();
     }
 
     private generateUniqueId(item: {
-        paintSeed?: number,
-        paintIndex?: number,
-        paintWear?: number,
-        defIndex?: number,
-        origin?: number,
-        rarity?: number,
-        questId?: number,
-        quality?: number,
-        dropReason?: number
+        paintSeed?: number;
+        paintIndex?: number;
+        paintWear?: number;
+        defIndex?: number;
+        origin?: number;
+        rarity?: number;
+        questId?: number;
+        quality?: number;
+        dropReason?: number;
     }): string {
         const values = [
             item.paintSeed || 0,
             item.paintIndex || 0,
             item.paintWear || 0,
             item.defIndex || 0,
-            // item.origin || 0,
-            // item.rarity || 0,
-            // item.questId || 0,
-            // item.quality || 0,
-            // item.dropReason || 0
-        ]
-        const stringToHash = values.join('-')
-        return createHash('sha1').update(stringToHash).digest('hex').substring(0, 8)
+        ];
+        const stringToHash = values.join('-');
+        return createHash('sha1').update(stringToHash).digest('hex').substring(0, 8);
     }
 }
