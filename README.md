@@ -57,7 +57,7 @@ $ docker run -p 3000:3000 -d cs2-inspect-server
 The server is configured to run on port 3000. If you want to change the port, you can do so by modifying the `PORT` environment variable in the `.env` file.
 
 ```bash
-PORT=3000
+PORT=3002
 ```
 
 ### Database
