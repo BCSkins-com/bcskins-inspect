@@ -46,6 +46,10 @@ lerna-debug.log*
 .temp
 .tmp
 
+# Custom for project
+accounts.txt
+accounts2.txt
+
 # Runtime data
 pids
 *.pid
