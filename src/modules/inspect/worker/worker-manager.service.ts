@@ -121,7 +121,11 @@ export class WorkerManagerService implements OnModuleInit {
         // First, try loading from environment variable (for cloud deployments)
         if (process.env.BOT_ACCOUNTS) {
             this.logger.log('Loading accounts from BOT_ACCOUNTS environment variable');
-            this.processAccountFile(process.env.BOT_ACCOUNTS);
+            // Support both actual newlines and ||| delimiter (in case passwords contain backslashes)
+            const accounts = process.env.BOT_ACCOUNTS
+                .replace(/\|\|\|/g, '\n') // Convert ||| to newlines
+                .trim();
+            this.processAccountFile(accounts);
             return;
         }
 
