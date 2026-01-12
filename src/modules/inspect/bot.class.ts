@@ -26,6 +26,22 @@ export enum BotError {
     LOGIN_THROTTLED = 'LOGIN_THROTTLED'
 }
 
+// Errors that should NOT trigger automatic reconnection (permanent failures)
+export const PERMANENT_ERRORS = [
+    BotError.INVALID_CREDENTIALS,
+    BotError.ACCOUNT_DISABLED,
+]
+
+// Errors that should trigger reconnection with backoff
+export const RECOVERABLE_ERRORS = [
+    BotError.CONNECTION_ERROR,
+    BotError.INITIALIZATION_ERROR,
+    BotError.TIMEOUT,
+    BotError.GC_ERROR,
+    BotError.RATE_LIMITED,
+    BotError.LOGIN_THROTTLED,
+]
+
 interface BotConfig {
     username: string
     password: string
@@ -37,6 +53,10 @@ interface BotConfig {
     debug?: boolean
     sessionPath?: string
     blacklistPath?: string
+    // Reconnection settings
+    maxReconnectAttempts?: number
+    baseReconnectDelay?: number
+    maxReconnectDelay?: number
 }
 
 export class Bot extends EventEmitter {
@@ -49,6 +69,7 @@ export class Bot extends EventEmitter {
     private currentInspectTimeout: NodeJS.Timeout | null = null
     private initializationTimeout: NodeJS.Timeout | null = null
     private cooldownTimeout: NodeJS.Timeout | null = null
+    private reconnectTimeout: NodeJS.Timeout | null = null
     private readonly sessionFile: string
     private refreshToken: string | null = null
     private inspectCount: number = 0;
@@ -59,6 +80,12 @@ export class Bot extends EventEmitter {
     private responseTimes: number[] = [];
     private startTime: number = Date.now();
     private cooldownCount: number = 0;
+    
+    // Reconnection state
+    private reconnectAttempts: number = 0;
+    private lastReconnectAttempt: number | null = null;
+    private lastError: BotError | null = null;
+    private isPermanentlyFailed: boolean = false;
 
     private readonly config: Required<BotConfig>
 
@@ -73,6 +100,10 @@ export class Bot extends EventEmitter {
             proxyUrl: '',
             sessionPath: './sessions',
             blacklistPath: './blacklist.txt',
+            // Reconnection defaults
+            maxReconnectAttempts: 10,
+            baseReconnectDelay: 30000,  // 30 seconds initial delay
+            maxReconnectDelay: 600000,  // 10 minutes max delay
             ...config
         }
         this.sessionFile = path.join(this.config.sessionPath, `${this.config.username}.json`)
@@ -381,7 +412,7 @@ export class Bot extends EventEmitter {
     }
 
     public async destroy(): Promise<void> {
-        this.cleanup()
+        this.fullCleanup()
 
         if (this.steamUser) {
             return new Promise<void>((resolve) => {
@@ -402,6 +433,7 @@ export class Bot extends EventEmitter {
         this.clearInspectTimeout()
         this.clearInitializationTimeout()
         this.clearCooldownTimeout()
+        // Note: Don't clear reconnect timeout here as cleanup is called during reconnection
 
         if (this.steamUser) {
             this.steamUser.removeAllListeners()
@@ -412,6 +444,14 @@ export class Bot extends EventEmitter {
             this.cs2Instance.removeAllListeners()
             this.cs2Instance = null
         }
+    }
+    
+    /**
+     * Full cleanup including reconnection timeout (for shutdown)
+     */
+    private fullCleanup(): void {
+        this.cleanup()
+        this.clearReconnectTimeout()
     }
 
     private clearInspectTimeout(): void {
@@ -446,15 +486,157 @@ export class Bot extends EventEmitter {
         this.log(`Initialization error: ${error.message}`, true)
         this.cleanup()
         this.status = BotStatus.ERROR
-        this.emit('error', this.mapError(error))
+        
+        const mappedError = this.mapError(error)
+        this.lastError = mappedError
+        
+        // Check if this is a permanent error that shouldn't trigger reconnection
+        if (PERMANENT_ERRORS.includes(mappedError)) {
+            this.isPermanentlyFailed = true
+            this.log(`Bot permanently failed due to ${mappedError}. No reconnection attempts will be made.`, true)
+            this.emit('error', mappedError)
+            return
+        }
+        
+        // Emit error and schedule reconnection for recoverable errors
+        this.emit('error', mappedError)
+        this.scheduleReconnect()
+    }
+    
+    /**
+     * Calculate reconnection delay with exponential backoff and jitter
+     */
+    private calculateReconnectDelay(): number {
+        // Exponential backoff: baseDelay * 2^attempts
+        const exponentialDelay = this.config.baseReconnectDelay * Math.pow(2, this.reconnectAttempts)
+        
+        // Cap at max delay
+        const cappedDelay = Math.min(exponentialDelay, this.config.maxReconnectDelay)
+        
+        // Add random jitter (±20%) to prevent thundering herd
+        const jitter = cappedDelay * 0.2 * (Math.random() - 0.5)
+        
+        return Math.floor(cappedDelay + jitter)
+    }
+    
+    /**
+     * Schedule a reconnection attempt
+     */
+    public scheduleReconnect(): void {
+        // Don't reconnect if permanently failed
+        if (this.isPermanentlyFailed) {
+            this.log(`Skipping reconnection - bot is permanently failed`, true)
+            return
+        }
+        
+        // Don't exceed max reconnection attempts
+        if (this.reconnectAttempts >= this.config.maxReconnectAttempts) {
+            this.log(`Max reconnection attempts (${this.config.maxReconnectAttempts}) reached. Giving up.`, true)
+            this.isPermanentlyFailed = true
+            this.emit('maxReconnectAttemptsReached')
+            return
+        }
+        
+        // Clear any existing reconnect timeout
+        this.clearReconnectTimeout()
+        
+        const delay = this.calculateReconnectDelay()
+        this.log(`Scheduling reconnection attempt ${this.reconnectAttempts + 1}/${this.config.maxReconnectAttempts} in ${Math.round(delay / 1000)}s`)
+        
+        this.reconnectTimeout = setTimeout(async () => {
+            await this.attemptReconnect()
+        }, delay)
+        
+        // Emit event for external tracking
+        this.emit('reconnectScheduled', {
+            attempt: this.reconnectAttempts + 1,
+            maxAttempts: this.config.maxReconnectAttempts,
+            delayMs: delay
+        })
+    }
+    
+    /**
+     * Attempt to reconnect the bot
+     */
+    private async attemptReconnect(): Promise<void> {
+        this.reconnectAttempts++
+        this.lastReconnectAttempt = Date.now()
+        
+        this.log(`Attempting reconnection (attempt ${this.reconnectAttempts}/${this.config.maxReconnectAttempts})`)
+        this.emit('reconnecting', { attempt: this.reconnectAttempts })
+        
+        try {
+            await this.initialize()
+            
+            // Success! Reset reconnection state
+            this.reconnectAttempts = 0
+            this.lastError = null
+            this.log(`Reconnection successful after ${this.reconnectAttempts} attempts`)
+            this.emit('reconnected')
+        } catch (error) {
+            this.log(`Reconnection attempt ${this.reconnectAttempts} failed: ${error.message}`, true)
+            // handleInitializationError will schedule the next reconnection if appropriate
+        }
+    }
+    
+    /**
+     * Force a reconnection attempt (for external triggers like health checks)
+     */
+    public async forceReconnect(): Promise<void> {
+        // Reset permanent failure flag to allow retry
+        if (this.isPermanentlyFailed && !PERMANENT_ERRORS.includes(this.lastError)) {
+            this.isPermanentlyFailed = false
+            this.reconnectAttempts = 0
+        }
+        
+        if (this.isPermanentlyFailed) {
+            throw new Error(`Cannot reconnect - bot has permanent error: ${this.lastError}`)
+        }
+        
+        this.clearReconnectTimeout()
+        await this.attemptReconnect()
+    }
+    
+    private clearReconnectTimeout(): void {
+        if (this.reconnectTimeout) {
+            clearTimeout(this.reconnectTimeout)
+            this.reconnectTimeout = null
+        }
+    }
+    
+    /**
+     * Check if the bot can be reconnected
+     */
+    public canReconnect(): boolean {
+        return !this.isPermanentlyFailed && 
+               this.reconnectAttempts < this.config.maxReconnectAttempts
+    }
+    
+    /**
+     * Get reconnection status for monitoring
+     */
+    public getReconnectStatus() {
+        return {
+            isPermanentlyFailed: this.isPermanentlyFailed,
+            reconnectAttempts: this.reconnectAttempts,
+            maxReconnectAttempts: this.config.maxReconnectAttempts,
+            lastReconnectAttempt: this.lastReconnectAttempt,
+            lastError: this.lastError,
+            canReconnect: this.canReconnect(),
+            hasScheduledReconnect: this.reconnectTimeout !== null
+        }
     }
 
     private handleDisconnect(): void {
-        this.log('Disconnected from Steam')
+        this.log('Disconnected from Steam', true)
         this.status = BotStatus.DISCONNECTED
         this.cleanup()
-
-        this.initialize()
+        
+        // Emit disconnect event for external tracking
+        this.emit('disconnected')
+        
+        // Schedule reconnection with backoff
+        this.scheduleReconnect()
     }
     private requestCS2License() {
         this.steamUser.requestFreeLicense([730], (err, grantedPackages, grantedAppIDs) => {
@@ -485,14 +667,18 @@ export class Bot extends EventEmitter {
     private handleGCDisconnect(): void {
         this.log('Disconnected from GC', true)
         this.status = BotStatus.ERROR
+        this.lastError = BotError.GC_ERROR
 
-        if (this.shouldRetry({ message: 'GC_DISCONNECT' })) {
-            this.log('Attempting to reconnect to GC...')
-            if (this.steamUser) {
-                this.steamUser.gamesPlayed([730])
-            }
+        // First try to reconnect to GC without full reconnection
+        if (this.steamUser && this.retryCount < this.config.maxRetries) {
+            this.retryCount++
+            this.log(`Attempting to reconnect to GC (attempt ${this.retryCount}/${this.config.maxRetries})...`)
+            this.steamUser.gamesPlayed([730], true)
         } else {
+            // If GC reconnection failed multiple times, do full reconnection
+            this.log('GC reconnection attempts exhausted, scheduling full reconnection...', true)
             this.emit('error', BotError.GC_ERROR)
+            this.scheduleReconnect()
         }
     }
 

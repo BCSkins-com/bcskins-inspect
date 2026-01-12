@@ -16,8 +16,11 @@ interface WorkerInfo {
         cooldownBots: number;
         errorBots: number;
         disconnectedBots: number;
+        reconnectingBots: number;
         totalBots: number;
         botDetails: any[];
+        throttledAccounts: number;
+        failedAccounts: number;
     };
     status: 'initializing' | 'ready' | 'error';
 }
@@ -213,8 +216,11 @@ export class WorkerManagerService implements OnModuleInit {
                     cooldownBots: 0,
                     errorBots: 0,
                     disconnectedBots: 0,
+                    reconnectingBots: 0,
                     totalBots: 0,
-                    botDetails: []
+                    botDetails: [],
+                    throttledAccounts: 0,
+                    failedAccounts: 0
                 },
                 status: 'initializing'
             });
@@ -249,6 +255,22 @@ export class WorkerManagerService implements OnModuleInit {
                 case 'shutdown':
                     // this.logger.log(`Worker ${workerId} shut down successfully`);
                     this.removeWorker(workerId);
+                    break;
+                // Reconnection events
+                case 'botError':
+                    this.handleBotError(message);
+                    break;
+                case 'botReconnectScheduled':
+                    this.handleBotReconnectScheduled(message);
+                    break;
+                case 'botReconnecting':
+                    this.handleBotReconnecting(message);
+                    break;
+                case 'botReconnected':
+                    this.handleBotReconnected(message);
+                    break;
+                case 'botPermanentlyFailed':
+                    this.handleBotPermanentlyFailed(message);
                     break;
                 default:
                 // this.logger.warn(`Unknown message from worker ${workerId}: ${message.type}`);
@@ -286,6 +308,95 @@ export class WorkerManagerService implements OnModuleInit {
 
                 // this.logger.debug(`Worker ${workerId} marked as ready with at least one ready bot`);
             }
+        }
+    }
+    
+    // ============ Reconnection Event Handlers ============
+    
+    private handleBotError(message: any): void {
+        const { workerId, username, error, reconnectStatus } = message;
+        this.logger.warn(`Bot ${username} in worker ${workerId} error: ${error}`);
+        
+        if (reconnectStatus?.hasScheduledReconnect) {
+            this.logger.log(`Bot ${username} has automatic reconnection scheduled`);
+        }
+    }
+    
+    private handleBotReconnectScheduled(message: any): void {
+        const { workerId, username, attempt, maxAttempts, delayMs } = message;
+        this.logger.log(`Bot ${username} reconnection scheduled: attempt ${attempt}/${maxAttempts} in ${Math.round(delayMs / 1000)}s`);
+    }
+    
+    private handleBotReconnecting(message: any): void {
+        const { workerId, username, attempt } = message;
+        this.logger.log(`Bot ${username} attempting reconnection (attempt ${attempt})`);
+    }
+    
+    private handleBotReconnected(message: any): void {
+        const { workerId, username, status } = message;
+        this.logger.log(`Bot ${username} successfully reconnected with status: ${status}`);
+        
+        // Update worker status
+        const workerInfo = this.workers.find(w => w.id === workerId);
+        if (workerInfo && status === 'ready') {
+            workerInfo.status = 'ready';
+            workerInfo.worker.postMessage({ type: 'getStats' });
+        }
+    }
+    
+    private handleBotPermanentlyFailed(message: any): void {
+        const { workerId, username, reason } = message;
+        this.logger.error(`Bot ${username} in worker ${workerId} permanently failed: ${reason}`);
+    }
+    
+    // ============ Reconnection Control Methods ============
+    
+    /**
+     * Request reconnection of a specific bot
+     */
+    public reconnectBot(username: string): void {
+        for (const workerInfo of this.workers) {
+            // Check if bot is in this worker's details
+            const botDetail = workerInfo.stats.botDetails?.find(b => b.username === username || b.username.startsWith(username));
+            if (botDetail) {
+                this.logger.log(`Requesting reconnection for bot ${username} in worker ${workerInfo.id}`);
+                workerInfo.worker.postMessage({ type: 'reconnectBot', username });
+                return;
+            }
+        }
+        this.logger.warn(`Cannot reconnect bot ${username}: not found in any worker`);
+    }
+    
+    /**
+     * Request reconnection of all failed/disconnected bots in a worker
+     */
+    public reconnectAllBotsInWorker(workerId: number): void {
+        const workerInfo = this.workers.find(w => w.id === workerId);
+        if (workerInfo) {
+            this.logger.log(`Requesting reconnection of all failed bots in worker ${workerId}`);
+            workerInfo.worker.postMessage({ type: 'reconnectAllBots' });
+        } else {
+            this.logger.warn(`Cannot find worker ${workerId}`);
+        }
+    }
+    
+    /**
+     * Request reconnection of all failed/disconnected bots across all workers
+     */
+    public reconnectAllBots(): void {
+        this.logger.log('Requesting reconnection of all failed bots across all workers');
+        for (const workerInfo of this.workers) {
+            workerInfo.worker.postMessage({ type: 'reconnectAllBots' });
+        }
+    }
+    
+    /**
+     * Trigger health check in all workers
+     */
+    public triggerHealthCheck(): void {
+        this.logger.log('Triggering health check in all workers');
+        for (const workerInfo of this.workers) {
+            workerInfo.worker.postMessage({ type: 'healthCheck' });
         }
     }
 
@@ -635,7 +746,10 @@ export class WorkerManagerService implements OnModuleInit {
         let errorBots = 0;
         let cooldownBots = 0;
         let disconnectedBots = 0;
+        let reconnectingBots = 0;
         let totalBots = 0;
+        let throttledAccounts = 0;
+        let failedAccounts = 0;
 
         // Aggregate stats from all workers
         for (const worker of this.workers) {
@@ -644,7 +758,10 @@ export class WorkerManagerService implements OnModuleInit {
             errorBots += worker.stats.errorBots || 0;
             cooldownBots += worker.stats.cooldownBots || 0;
             disconnectedBots += worker.stats.disconnectedBots || 0;
+            reconnectingBots += worker.stats.reconnectingBots || 0;
             totalBots += worker.stats.totalBots || 0;
+            throttledAccounts += worker.stats.throttledAccounts || 0;
+            failedAccounts += worker.stats.failedAccounts || 0;
         }
 
         // Active inspections
@@ -677,15 +794,20 @@ export class WorkerManagerService implements OnModuleInit {
             cooldownBots,
             errorBots,
             disconnectedBots,
+            reconnectingBots,
             totalBots,
             activeInspections,
             botAvailabilityPercentage,
+            // Reconnection tracking
+            throttledAccounts,
+            failedAccounts,
             metrics: {
                 readyBots,
                 busyBots,
                 cooldownBots,
                 errorBots,
                 disconnectedBots,
+                reconnectingBots,
                 totalBots,
                 botAvailabilityPercentage,
                 activeInspections,
@@ -697,7 +819,10 @@ export class WorkerManagerService implements OnModuleInit {
                 failed: this.failed,
                 cached: this.cached,
                 timeouts: this.timeouts,
-                botDetails
+                botDetails,
+                // Reconnection tracking
+                throttledAccounts,
+                failedAccounts
             },
             responseTimeStats: this.getResponseTimeStats()
         };
